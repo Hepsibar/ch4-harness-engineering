@@ -45,7 +45,10 @@
     {
       "step": 5,
       "name": "ui",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-11-10T11:24:49+0900",
+      "summary": "src/components/(ChannelForm[Client, 제어 입력+분석 버튼→상위 콜백], AnalysisResult[블록 A: ChannelAnalysis 요약 + 블록 B: ViralVideo[] 목록], RecommendationList[블록 C: Recommendation[] 카드—제목안/앵글/왜뜨는지/왜맞는지]) + src/app/page.tsx를 Client로 전환해 조립(useState만: input/loading/result/error, 제출 시 fetch POST /api/analyze만 호출—외부 API 직접 호출 없음, 로딩 중 수집→분석→탐색→추천 진행표시, 에러 시 친화 메시지+재입력 유도). 미니멀·라이트·포인트 1색(red). 전역 상태 라이브러리 미추가. lint·build·test(39) 모두 통과.",
+      "completed_at": "2026-11-10T11:26:30+0900"
     }
   ],
   "created_at": "2026-11-10T11:10:25+0900"
