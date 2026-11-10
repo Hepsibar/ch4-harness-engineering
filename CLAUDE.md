@@ -1,14 +1,15 @@
-# 프로젝트: {프로젝트명}
+# 프로젝트: YT Next Advisor (유튜브 넥스트 콘텐츠 어드바이저)
 
 ## 기술 스택
-- {프레임워크 (예: Next.js 15)}
-- {언어 (예: TypeScript strict mode)}
-- {스타일링 (예: Tailwind CSS)}
+- Next.js 15 (App Router)
+- TypeScript (strict mode)
+- Tailwind CSS
+- Vitest (테스트 러너)
 
 ## 아키텍처 규칙
-- CRITICAL: {절대 지켜야 할 규칙 1 (예: 모든 API 로직은 app/api/ 라우트 핸들러에서만 처리)}
-- CRITICAL: {절대 지켜야 할 규칙 2 (예: 클라이언트 컴포넌트에서 직접 외부 API를 호출하지 말 것)}
-- {일반 규칙 (예: 컴포넌트는 components/ 폴더에, 타입은 types/ 폴더에 분리)}
+- CRITICAL: 모든 외부 API 호출(YouTube Data API, Anthropic)은 `src/app/api/` 라우트 핸들러(서버)에서만 처리한다. 클라이언트 컴포넌트에서 직접 호출하지 않는다.
+- CRITICAL: API 키는 서버 전용 환경변수로만 읽는다. `NEXT_PUBLIC_` 접두사를 붙이지 않는다 (브라우저 번들에 노출됨).
+- 외부 API 래퍼는 `src/services/`, 컴포넌트는 `src/components/`, 타입은 `src/types/`, 순수 유틸은 `src/lib/`에 분리한다.
 
 ## 개발 프로세스
 - CRITICAL: 새 기능 구현 시 반드시 테스트를 먼저 작성하고, 테스트가 통과하는 구현을 작성할 것 (TDD)
@@ -18,4 +19,4 @@
 npm run dev      # 개발 서버
 npm run build    # 프로덕션 빌드
 npm run lint     # ESLint
-npm run test     # 테스트
+npm run test     # 테스트 (vitest run)
