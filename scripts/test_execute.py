@@ -469,6 +469,19 @@ class TestInvokeClaude:
 
         assert mock_run.call_args[1]["timeout"] == 1800
 
+    def test_timeout_does_not_crash(self, executor):
+        """Claude 호출 타임아웃 시 예외를 던지지 않고 미완료(124)로 처리한다."""
+        step = {"step": 2, "name": "ui"}
+        with patch("subprocess.run",
+                   side_effect=subprocess.TimeoutExpired("claude", 1800)):
+            output = executor._invoke_claude(step, "preamble")
+        assert output["exitCode"] == 124
+        assert "TIMEOUT" in output["stderr"]
+        # 디버깅용 output 파일도 정상 기록
+        out_file = executor._phase_dir / "step2-output.json"
+        assert out_file.exists()
+        assert json.loads(out_file.read_text(encoding="utf-8"))["exitCode"] == 124
+
 
 # ---------------------------------------------------------------------------
 # progress_indicator (= 이전 Spinner)
@@ -513,6 +526,13 @@ class TestMainCli:
                 with pytest.raises(SystemExit) as exc_info:
                     ex.main()
                 assert exc_info.value.code == 1
+
+    def test_reset_flag_does_not_run(self, tmp_project, phase_dir):
+        with patch("sys.argv", ["execute.py", "0-mvp", "--reset"]):
+            with patch.object(ex, "ROOT", tmp_project):
+                with patch.object(ex.StepExecutor, "run") as mock_run:
+                    ex.main()
+                mock_run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -686,3 +706,82 @@ class TestAcGating:
         s2 = next(s for s in idx["steps"] if s["step"] == 2)
         assert s2["status"] == "error"
         assert "AC" in s2["error_message"]
+
+
+# ---------------------------------------------------------------------------
+# 동시 실행 락 — _acquire_lock / _release_lock
+# ---------------------------------------------------------------------------
+
+class TestLock:
+    def test_acquire_creates_lockfile(self, executor):
+        executor._acquire_lock()
+        assert (executor._phase_dir / ".execute.lock").exists()
+        executor._release_lock()
+
+    def test_second_acquire_exits_3(self, executor):
+        executor._acquire_lock()
+        try:
+            with pytest.raises(SystemExit) as exc_info:
+                executor._acquire_lock()
+            assert exc_info.value.code == 3
+        finally:
+            executor._release_lock()
+
+    def test_release_removes_lockfile(self, executor):
+        executor._acquire_lock()
+        executor._release_lock()
+        assert not (executor._phase_dir / ".execute.lock").exists()
+
+    def test_release_without_lock_is_safe(self, executor):
+        executor._release_lock()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# 복구 — reset()
+# ---------------------------------------------------------------------------
+
+class TestReset:
+    def _write_steps(self, executor, steps):
+        idx = json.loads(executor._index_file.read_text(encoding="utf-8"))
+        idx["steps"] = steps
+        executor._index_file.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
+
+    def test_resets_error_and_blocked(self, executor):
+        self._write_steps(executor, [
+            {"step": 0, "name": "a", "status": "completed", "summary": "done"},
+            {"step": 1, "name": "b", "status": "error", "error_message": "boom", "failed_at": "t"},
+            {"step": 2, "name": "c", "status": "blocked", "blocked_reason": "key", "blocked_at": "t"},
+        ])
+        n = executor.reset()
+        assert n == 2
+        idx = json.loads(executor._index_file.read_text(encoding="utf-8"))
+        assert idx["steps"][1]["status"] == "pending"
+        assert "error_message" not in idx["steps"][1]
+        assert "failed_at" not in idx["steps"][1]
+        assert idx["steps"][2]["status"] == "pending"
+        assert "blocked_reason" not in idx["steps"][2]
+
+    def test_keeps_completed_untouched(self, executor):
+        self._write_steps(executor, [
+            {"step": 0, "name": "a", "status": "completed", "summary": "done"},
+        ])
+        executor.reset()
+        idx = json.loads(executor._index_file.read_text(encoding="utf-8"))
+        assert idx["steps"][0]["status"] == "completed"
+        assert idx["steps"][0]["summary"] == "done"
+
+    def test_resets_top_index(self, executor, top_index):
+        executor._top_index_file = top_index
+        top = json.loads(top_index.read_text(encoding="utf-8"))
+        top["phases"][0]["status"] = "error"
+        top["phases"][0]["failed_at"] = "t"
+        top_index.write_text(json.dumps(top, ensure_ascii=False), encoding="utf-8")
+
+        self._write_steps(executor, [
+            {"step": 0, "name": "a", "status": "error", "error_message": "x"},
+        ])
+        executor.reset()
+        after = json.loads(top_index.read_text(encoding="utf-8"))
+        mvp = next(p for p in after["phases"] if p["dir"] == "0-mvp")
+        assert mvp["status"] == "pending"
+        assert "failed_at" not in mvp

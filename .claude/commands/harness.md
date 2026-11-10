@@ -137,9 +137,13 @@ npm test        # 테스트 통과
 ### E. 실행
 
 ```bash
-python3 scripts/execute.py {task-name}        # 순차 실행
-python3 scripts/execute.py {task-name} --push  # 실행 후 push
+python3 scripts/execute.py {task-name}         # 순차 실행
+python3 scripts/execute.py {task-name} --push   # 실행 후 push
+python3 scripts/execute.py {task-name} --reset  # error/blocked step을 pending으로 되돌림
 ```
+
+> Windows에서는 `python3` 대신 `python`을 사용한다.
+> 중복 실행은 phase 디렉토리의 `.execute.lock`으로 차단된다. 비정상 종료로 락이 남으면 해당 파일을 지운다.
 
 execute.py가 자동으로 처리하는 것:
 
@@ -153,5 +157,6 @@ execute.py가 자동으로 처리하는 것:
 
 에러 복구:
 
-- **error 발생 시**: `phases/{task-name}/index.json`에서 해당 step의 `status`를 `"pending"`으로 바꾸고 `error_message`를 삭제한 뒤 재실행한다.
-- **blocked 발생 시**: `blocked_reason`에 적힌 사유를 해결한 뒤, `status`를 `"pending"`으로 바꾸고 `blocked_reason`을 삭제한 뒤 재실행한다.
+- **error 발생 시**: 에러를 수정한 뒤 `--reset`으로 상태를 되돌리고 재실행한다. (수동: `index.json`에서 `status`를 `"pending"`으로 바꾸고 `error_message` 삭제)
+- **blocked 발생 시**: `blocked_reason`에 적힌 사유(API 키, 외부 인증 등)를 먼저 해결한 뒤 `--reset`으로 되돌리고 재실행한다.
+- `--reset`은 error/blocked인 step과 top-level phase 상태를 pending으로 되돌리고 관련 타임스탬프·사유 필드를 제거한다.

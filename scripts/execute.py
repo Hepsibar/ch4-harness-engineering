@@ -22,6 +22,15 @@ from typing import Optional
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _as_text(v) -> str:
+    """None/bytes/str 를 안전하게 문자열로 변환한다."""
+    if v is None:
+        return ""
+    if isinstance(v, bytes):
+        return v.decode("utf-8", "replace")
+    return str(v)
+
+
 @contextlib.contextmanager
 def progress_indicator(label: str):
     """터미널 진행 표시기. with 문으로 사용하며 .elapsed 로 경과 시간을 읽는다."""
@@ -54,6 +63,7 @@ class StepExecutor:
     """Phase 디렉토리 안의 step들을 순차 실행하는 하네스."""
 
     MAX_RETRIES = 3
+    CLAUDE_TIMEOUT = 1800
     FEAT_MSG = "feat({phase}): step {num} — {name}"
     CHORE_MSG = "chore({phase}): step {num} output"
     TZ = timezone(timedelta(hours=9))
@@ -81,13 +91,69 @@ class StepExecutor:
         self._total = len(idx["steps"])
 
     def run(self):
-        self._print_header()
-        self._check_blockers()
-        self._checkout_branch()
-        guardrails = self._load_guardrails()
-        self._ensure_created_at()
-        self._execute_all_steps(guardrails)
-        self._finalize()
+        self._acquire_lock()
+        try:
+            self._print_header()
+            self._check_blockers()
+            self._checkout_branch()
+            guardrails = self._load_guardrails()
+            self._ensure_created_at()
+            self._execute_all_steps(guardrails)
+            self._finalize()
+        finally:
+            self._release_lock()
+
+    # --- 동시 실행 락 ---
+
+    def _acquire_lock(self):
+        """phase 디렉토리에 원자적 lockfile을 생성해 중복 실행을 막는다."""
+        self._lock_file = self._phase_dir / ".execute.lock"
+        try:
+            fd = os.open(self._lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+        except FileExistsError:
+            print(f"  ERROR: 이미 실행 중이거나 이전 실행이 비정상 종료되었습니다.")
+            print(f"  Lock: {self._lock_file}")
+            print(f"  다른 실행이 없다면 위 파일을 삭제하고 다시 시도하세요.")
+            sys.exit(3)
+
+    def _release_lock(self):
+        lf = getattr(self, "_lock_file", None)
+        if lf is not None and lf.exists():
+            try:
+                lf.unlink()
+            except OSError:
+                pass
+
+    # --- 복구 ---
+
+    def reset(self):
+        """error/blocked step을 pending으로 되돌리고 관련 필드를 제거한다.
+
+        harness.md의 수동 복구 절차를 자동화한다.
+        """
+        index = self._read_json(self._index_file)
+        n = 0
+        for s in index["steps"]:
+            if s["status"] in ("error", "blocked"):
+                s["status"] = "pending"
+                for k in ("error_message", "blocked_reason", "failed_at", "blocked_at"):
+                    s.pop(k, None)
+                n += 1
+        self._write_json(self._index_file, index)
+
+        if self._top_index_file.exists():
+            top = self._read_json(self._top_index_file)
+            for p in top.get("phases", []):
+                if p.get("dir") == self._phase_dir_name and p.get("status") in ("error", "blocked"):
+                    p["status"] = "pending"
+                    p.pop("failed_at", None)
+                    p.pop("blocked_at", None)
+            self._write_json(self._top_index_file, top)
+
+        print(f"  Reset {n} step(s) to pending. 이제 다시 실행하세요.")
+        return n
 
     # --- timestamps ---
 
@@ -235,21 +301,30 @@ class StepExecutor:
             sys.exit(1)
 
         prompt = preamble + step_file.read_text(encoding="utf-8")
-        result = subprocess.run(
-            ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "json", prompt],
-            cwd=self._root, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=1800,
-        )
+        try:
+            result = subprocess.run(
+                ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "json", prompt],
+                cwd=self._root, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=self.CLAUDE_TIMEOUT,
+            )
+            returncode, stdout, stderr = result.returncode, result.stdout, result.stderr
+        except subprocess.TimeoutExpired as e:
+            # 타임아웃이 하네스 전체를 크래시시키지 않도록 미완료로 처리한다.
+            # status는 미갱신 → 호출부가 '미완료'로 보고 재시도/에러 경로를 탄다.
+            stdout = _as_text(e.stdout)
+            stderr = (_as_text(e.stderr)
+                      + f"\n[TIMEOUT] Claude 호출이 {self.CLAUDE_TIMEOUT}s를 초과해 중단됨.").strip()
+            returncode = 124
 
-        if result.returncode != 0:
-            print(f"\n  WARN: Claude가 비정상 종료됨 (code {result.returncode})")
-            if result.stderr:
-                print(f"  stderr: {result.stderr[:500]}")
+        if returncode != 0:
+            print(f"\n  WARN: Claude가 비정상 종료됨 (code {returncode})")
+            if stderr:
+                print(f"  stderr: {stderr[:500]}")
 
         output = {
             "step": step_num, "name": step_name,
-            "exitCode": result.returncode,
-            "stdout": result.stdout, "stderr": result.stderr,
+            "exitCode": returncode,
+            "stdout": stdout, "stderr": stderr,
         }
         out_path = self._phase_dir / f"step{step_num}-output.json"
         with open(out_path, "w", encoding="utf-8") as f:
@@ -463,9 +538,15 @@ def main():
     parser = argparse.ArgumentParser(description="Harness Step Executor")
     parser.add_argument("phase_dir", help="Phase directory name (e.g. 0-mvp)")
     parser.add_argument("--push", action="store_true", help="Push branch after completion")
+    parser.add_argument("--reset", action="store_true",
+                        help="error/blocked step을 pending으로 되돌리고 종료(실행하지 않음)")
     args = parser.parse_args()
 
-    StepExecutor(args.phase_dir, auto_push=args.push).run()
+    executor = StepExecutor(args.phase_dir, auto_push=args.push)
+    if args.reset:
+        executor.reset()
+        return
+    executor.run()
 
 
 if __name__ == "__main__":

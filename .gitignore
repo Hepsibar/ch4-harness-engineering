@@ -13,6 +13,7 @@ tsconfig.tsbuildinfo
 # phase execution outputs
 phases/**/phase*-output.json
 phases/**/step*-output.json
+phases/**/.execute.lock
 
 # python (harness scripts)
 __pycache__/
