@@ -24,7 +24,7 @@
       "status": "completed",
       "started_at": "2026-11-10T11:15:40+0900",
       "summary": "src/lib/parseChannel.ts(순수 입력 파서) + src/services/youtube.ts(fetch 기반 YouTube Data API v3 래퍼: resolveChannel/getChannelVideos/searchViralVideos, 키는 process.env.YOUTUBE_API_KEY) + fetch 모킹 단위 테스트(parseChannel 8 / youtube 9); vitest alias(@→src) 추가. build·test 모두 통과.",
-      "completed_at": "2026-11-10T11:19:30+0900"
+      "completed_at": "2026-11-10T11:20:16+0900"
     },
     {
       "step": 3,
