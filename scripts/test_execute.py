@@ -557,3 +557,132 @@ class TestCheckBlockers:
         with pytest.raises(SystemExit) as exc_info:
             inst._check_blockers()
         assert exc_info.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# AC 독립 검증 — _get_ac / _verify_ac
+# ---------------------------------------------------------------------------
+
+def _set_default_ac(phase_dir, ac):
+    idx = json.loads((phase_dir / "index.json").read_text(encoding="utf-8"))
+    idx["default_ac"] = ac
+    (phase_dir / "index.json").write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
+
+
+class TestGetAc:
+    def test_step_level_ac(self, executor):
+        step = {"step": 2, "name": "ui", "ac": ["npm run build"]}
+        assert executor._get_ac(step) == ["npm run build"]
+
+    def test_default_ac_fallback(self, executor, phase_dir):
+        _set_default_ac(phase_dir, ["npm test"])
+        assert executor._get_ac({"step": 2, "name": "ui"}) == ["npm test"]
+
+    def test_none_returns_empty(self, executor):
+        assert executor._get_ac({"step": 2, "name": "ui"}) == []
+
+    def test_step_overrides_default(self, executor, phase_dir):
+        _set_default_ac(phase_dir, ["npm test"])
+        step = {"step": 2, "name": "ui", "ac": ["echo hi"]}
+        assert executor._get_ac(step) == ["echo hi"]
+
+
+class TestVerifyAc:
+    def test_no_ac_passes(self, executor):
+        ok, _ = executor._verify_ac({"step": 2, "name": "ui"})
+        assert ok is True
+
+    def test_all_pass(self, executor):
+        step = {"step": 2, "name": "ui", "ac": ["cmd1", "cmd2"]}
+        with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="", stderr="")):
+            ok, out = executor._verify_ac(step)
+        assert ok is True
+        assert "[ok]" in out
+
+    def test_first_failure_short_circuits(self, executor):
+        step = {"step": 2, "name": "ui", "ac": ["bad", "never"]}
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return MagicMock(returncode=1, stdout="boom", stderr="errtext")
+        with patch("subprocess.run", side_effect=fake_run):
+            ok, out = executor._verify_ac(step)
+        assert ok is False
+        assert "boom" in out or "errtext" in out
+        assert calls == ["bad"]  # 두 번째 커맨드는 실행되지 않는다
+
+    def test_timeout_is_failure(self, executor):
+        step = {"step": 2, "name": "ui", "ac": ["slow"]}
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("slow", 900)):
+            ok, out = executor._verify_ac(step)
+        assert ok is False
+        assert "TIMEOUT" in out
+
+
+# ---------------------------------------------------------------------------
+# AC 게이팅 통합 — completed 자기신고를 AC로 검증
+# ---------------------------------------------------------------------------
+
+class TestAcGating:
+    def _mock_invoke_sets_completed(self, executor):
+        def fake_invoke(step, preamble):
+            idx = json.loads(executor._index_file.read_text(encoding="utf-8"))
+            for s in idx["steps"]:
+                if s["step"] == step["step"]:
+                    s["status"] = "completed"
+                    s["summary"] = "done"
+            executor._index_file.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
+            return {}
+        executor._invoke_claude = fake_invoke
+
+    def test_completed_and_ac_passes(self, executor, phase_dir):
+        _set_default_ac(phase_dir, ["npm test"])
+        self._mock_invoke_sets_completed(executor)
+        executor._commit_step = lambda *a: None
+        executor._verify_ac = lambda step: (True, "ok")
+
+        assert executor._execute_single_step({"step": 2, "name": "ui"}, "") is True
+        idx = json.loads(executor._index_file.read_text(encoding="utf-8"))
+        s2 = next(s for s in idx["steps"] if s["step"] == 2)
+        assert s2["status"] == "completed"
+        assert "completed_at" in s2
+
+    def test_ac_fail_then_pass_retries(self, executor, phase_dir):
+        _set_default_ac(phase_dir, ["npm test"])
+        self._mock_invoke_sets_completed(executor)
+        executor._commit_step = lambda *a: None
+
+        verify_calls = {"n": 0}
+
+        def verify(step):
+            verify_calls["n"] += 1
+            return (False, "ac boom") if verify_calls["n"] == 1 else (True, "")
+        executor._verify_ac = verify
+
+        invoke_calls = {"n": 0}
+        base_invoke = executor._invoke_claude
+
+        def counting(step, preamble):
+            invoke_calls["n"] += 1
+            return base_invoke(step, preamble)
+        executor._invoke_claude = counting
+
+        assert executor._execute_single_step({"step": 2, "name": "ui"}, "") is True
+        assert invoke_calls["n"] == 2   # 재시도 1회
+        assert verify_calls["n"] == 2
+
+    def test_ac_fail_all_attempts_errors(self, executor, phase_dir):
+        _set_default_ac(phase_dir, ["npm test"])
+        self._mock_invoke_sets_completed(executor)
+        executor._commit_step = lambda *a: None
+        executor._update_top_index = lambda *a: None
+        executor._verify_ac = lambda step: (False, "always boom")
+
+        with pytest.raises(SystemExit) as exc_info:
+            executor._execute_single_step({"step": 2, "name": "ui"}, "")
+        assert exc_info.value.code == 1
+        idx = json.loads(executor._index_file.read_text(encoding="utf-8"))
+        s2 = next(s for s in idx["steps"] if s["step"] == 2)
+        assert s2["status"] == "error"
+        assert "AC" in s2["error_message"]

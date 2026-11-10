@@ -55,10 +55,11 @@
 {
   "project": "<프로젝트명>",
   "phase": "<task-name>",
+  "default_ac": ["npm run build", "npm test"],
   "steps": [
     { "step": 0, "name": "project-setup", "status": "pending" },
     { "step": 1, "name": "core-types", "status": "pending" },
-    { "step": 2, "name": "api-layer", "status": "pending" }
+    { "step": 2, "name": "api-layer", "status": "pending", "ac": ["npm run build", "npm test"] }
   ]
 }
 ```
@@ -67,9 +68,13 @@
 
 - `project`: 프로젝트명 (CLAUDE.md 참조).
 - `phase`: task 이름. 디렉토리명과 일치시킨다.
+- `default_ac`: (권장) 모든 step에 공통 적용할 AC 커맨드 배열. execute.py가 각 step 완료 시 **직접 실행해 독립 검증**한다 — 에이전트의 `completed` 자기신고만으로는 완료 처리하지 않는다.
 - `steps[].step`: 0부터 시작하는 순번.
 - `steps[].name`: kebab-case slug.
 - `steps[].status`: 초기값은 모두 `"pending"`.
+- `steps[].ac`: (선택) 해당 step 전용 AC 커맨드 배열. 있으면 `default_ac`보다 우선한다. step.md의 Acceptance Criteria와 일치시킨다.
+
+> CRITICAL: AC를 하나도 정의하지 않으면 하네스가 독립 검증을 **생략**하고 에이전트 신고에 의존한다(경고 출력). 반드시 `default_ac` 또는 step별 `ac`를 넣어라.
 
 상태 전이와 자동 기록 필드:
 
@@ -141,7 +146,8 @@ execute.py가 자동으로 처리하는 것:
 - `feat-{task-name}` 브랜치 생성/checkout
 - 가드레일 주입 — CLAUDE.md + docs/*.md 내용을 매 step 프롬프트에 포함
 - 컨텍스트 누적 — 완료된 step의 summary를 다음 step 프롬프트에 전달
-- 자가 교정 — 실패 시 최대 3회 재시도하며, 이전 에러 메시지를 프롬프트에 피드백
+- **AC 독립 검증** — 에이전트가 `completed`로 신고해도 하네스가 `ac`/`default_ac` 커맨드를 직접 실행해 통과해야만 완료 처리한다. 실패하면 실패로 강등해 재시도한다.
+- 자가 교정 — 실패 시 최대 3회 재시도하며, 이전 에러 메시지(AC 실패 로그 포함)를 프롬프트에 피드백
 - 2단계 커밋 — 코드 변경(`feat`)과 메타데이터(`chore`)를 분리 커밋
 - 타임스탬프 — started_at, completed_at, failed_at, blocked_at 자동 기록
 

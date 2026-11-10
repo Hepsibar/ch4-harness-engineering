@@ -289,6 +289,49 @@ class StepExecutor:
             index["created_at"] = self._stamp()
             self._write_json(self._index_file, index)
 
+    # --- AC 독립 검증 ---
+
+    def _get_ac(self, step: dict) -> list:
+        """이 step에 적용할 AC 커맨드 목록.
+
+        우선순위: step["ac"] > task index.json의 "default_ac" > [] (검증 없음).
+        """
+        if isinstance(step.get("ac"), list):
+            return step["ac"]
+        idx = self._read_json(self._index_file)
+        dflt = idx.get("default_ac")
+        return dflt if isinstance(dflt, list) else []
+
+    def _verify_ac(self, step: dict) -> tuple:
+        """AC 커맨드를 하네스가 직접 실행해 독립 검증한다.
+
+        모두 통과하면 (True, 로그), 하나라도 실패하면 (False, 실패 로그).
+        AC가 정의돼 있지 않으면 (True, "") — 기존 동작 보존(에이전트 신고 신뢰).
+        """
+        commands = self._get_ac(step)
+        if not commands:
+            print(f"  ⚠ Step {step['step']}: AC 미정의 — 독립 검증 생략(에이전트 신고에 의존). "
+                  f"index.json에 step별 \"ac\" 또는 task \"default_ac\"를 권장.")
+            return True, ""
+
+        outputs = []
+        for cmd in commands:
+            try:
+                r = subprocess.run(
+                    cmd, cwd=self._root, shell=True,
+                    capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=900,
+                )
+            except subprocess.TimeoutExpired:
+                outputs.append(f"$ {cmd}\n[TIMEOUT 900s]")
+                return False, "\n".join(outputs)
+            tail = ((r.stdout or "")[-1500:] + (r.stderr or "")[-1500:]).strip()
+            if r.returncode != 0:
+                outputs.append(f"$ {cmd}\n[exit {r.returncode}]\n{tail}")
+                return False, "\n".join(outputs)
+            outputs.append(f"$ {cmd} [ok]")
+        return True, "\n".join(outputs)
+
     # --- 실행 루프 ---
 
     def _execute_single_step(self, step: dict, guardrails: str) -> bool:
@@ -314,14 +357,25 @@ class StepExecutor:
             status = next((s.get("status", "pending") for s in index["steps"] if s["step"] == step_num), "pending")
             ts = self._stamp()
 
+            verified_fail = None
             if status == "completed":
-                for s in index["steps"]:
-                    if s["step"] == step_num:
-                        s["completed_at"] = ts
-                self._write_json(self._index_file, index)
-                self._commit_step(step_num, step_name)
-                print(f"  ✓ Step {step_num}: {step_name} [{elapsed}s]")
-                return True
+                # 에이전트의 completed 자기신고를 그대로 믿지 않는다.
+                # 하네스가 직접 AC 커맨드를 실행해 독립 검증한다.
+                ac_ok, ac_out = self._verify_ac(step)
+                if ac_ok:
+                    for s in index["steps"]:
+                        if s["step"] == step_num:
+                            s["completed_at"] = ts
+                    self._write_json(self._index_file, index)
+                    self._commit_step(step_num, step_name)
+                    suffix = " (AC 검증 통과)" if self._get_ac(step) else ""
+                    print(f"  ✓ Step {step_num}: {step_name} [{elapsed}s]{suffix}")
+                    return True
+                verified_fail = (
+                    "하네스 독립 AC 검증 실패 (에이전트의 completed 신고를 신뢰하지 않음):\n"
+                    + ac_out
+                )
+                print(f"  ✗ Step {step_num}: 에이전트는 완료로 신고했으나 AC 독립 검증 실패")
 
             if status == "blocked":
                 for s in index["steps"]:
@@ -334,7 +388,7 @@ class StepExecutor:
                 self._update_top_index("blocked")
                 sys.exit(2)
 
-            err_msg = next(
+            err_msg = verified_fail or next(
                 (s.get("error_message", "Step did not update status") for s in index["steps"] if s["step"] == step_num),
                 "Step did not update status",
             )
