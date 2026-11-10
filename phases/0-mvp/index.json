@@ -40,7 +40,7 @@
       "status": "completed",
       "started_at": "2026-11-10T11:22:52+0900",
       "summary": "src/app/api/analyze/route.ts(POST, Node 런타임: 수집→분석→탐색→추천 오케스트레이션. resolveChannel→getChannelVideos(id,20)→analyzeChannel→searchViralVideos(topics,{publishedAfterMonths:3})→recommendNext(_,_,4)→AnalyzeResult. 외부 호출 전부 서비스 경유, 직접 fetch 없음. channel 누락/잘못된 JSON→400, 서비스 throw→500, 에러 응답에 키/스택 등 민감정보 미노출) + 서비스 모킹 라우트 테스트(route 6, 네트워크 없음); build·test(39) 모두 통과.",
-      "completed_at": "2026-11-10T11:24:30+0900"
+      "completed_at": "2026-11-10T11:24:48+0900"
     },
     {
       "step": 5,
