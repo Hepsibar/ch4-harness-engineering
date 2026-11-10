@@ -16,7 +16,7 @@
       "status": "completed",
       "started_at": "2026-11-10T11:14:12+0900",
       "summary": "src/types/index.ts에 도메인 타입 정의(Channel, Video, ChannelAnalysis, ViralVideo, Recommendation, AnalyzeResult) + 구조 sanity 테스트(src/types/__tests__/types.test.ts); build·test 모두 통과.",
-      "completed_at": "2026-11-10T11:15:00+0900"
+      "completed_at": "2026-11-10T11:15:39+0900"
     },
     {
       "step": 2,
