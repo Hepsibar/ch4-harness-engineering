@@ -32,7 +32,7 @@
       "status": "completed",
       "started_at": "2026-11-10T11:20:16+0900",
       "summary": "src/services/claude.ts(@anthropic-ai/sdk 서버 전용 래퍼: analyzeChannel/recommendNext, 키는 process.env.ANTHROPIC_API_KEY·키 없으면 Error, 모델 기본 claude-haiku-5-5·ANTHROPIC_MODEL 교체, JSON 구조화 출력 파싱+코드펜스 제거, 파싱 실패 시 Error) + SDK 모킹 단위 테스트(claude 9, 네트워크 없음); build·test(33) 모두 통과.",
-      "completed_at": "2026-11-10T11:22:00+0900"
+      "completed_at": "2026-11-10T11:22:51+0900"
     },
     {
       "step": 4,
