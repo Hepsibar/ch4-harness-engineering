@@ -143,16 +143,32 @@ export async function searchViralVideos(
     Date.now() - months * 30 * 24 * 60 * 60 * 1000,
   ).toISOString();
 
-  const searchData = await ytFetch("search", {
-    part: "id",
-    q: keywords.join(" "),
-    type: "video",
-    order: "viewCount",
-    maxResults: String(max),
-    publishedAfter,
-  });
+  // 분석 topics 는 긴 서술형일 수 있으므로 검색 친화적으로 정리한다:
+  // 괄호 안 보조설명/특수문자를 제거하고 상위 토큰만 사용해 과도한 구체화를 막는다.
+  const q = keywords
+    .map((k) => k.replace(/\([^)]*\)/g, " ").replace(/[\/,|·]+/g, " "))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .slice(0, 8)
+    .join(" ");
 
-  const ids = collectVideoIds(searchData);
+  async function searchIds(withDate: boolean): Promise<string[]> {
+    const params: Record<string, string> = {
+      part: "id",
+      q,
+      type: "video",
+      order: "viewCount",
+      maxResults: String(max),
+    };
+    if (withDate) params.publishedAfter = publishedAfter;
+    return collectVideoIds(await ytFetch("search", params));
+  }
+
+  // 최근 N개월 우선, 결과가 없으면 기간 제한을 풀어 한 번 더 시도한다.
+  let ids = await searchIds(true);
+  if (ids.length === 0) ids = await searchIds(false);
   if (ids.length === 0) return [];
 
   const videosData = await ytFetch("videos", {

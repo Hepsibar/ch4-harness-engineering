@@ -197,16 +197,23 @@ describe("youtube service", () => {
       expect(decoded).toContain("생산성");
     });
 
-    it("opts 로 max / publishedAfterMonths 를 재정의", async () => {
-      mockFetchOnce({ items: [] });
+    it("opts 로 max / publishedAfterMonths 를 재정의, 0건이면 기간 제한 풀고 재시도", async () => {
+      mockFetchOnce({ items: [] }); // 1차: 최근 N개월 → 0건
+      mockFetchOnce({ items: [] }); // 2차(재시도): 기간 제한 완화 → 여전히 0건
       const viral = await searchViralVideos(["x"], {
         max: 5,
         publishedAfterMonths: 1,
       });
       expect(viral).toEqual([]);
-      const searchUrl = callUrl(0);
-      expect(searchUrl).toContain("maxResults=5");
-      expect(searchUrl).toContain("publishedAfter=");
+
+      // 1차 호출: 기간 제한 포함
+      const first = callUrl(0);
+      expect(first).toContain("maxResults=5");
+      expect(first).toContain("publishedAfter=");
+      // 2차 호출(재시도): 기간 제한 없이 다시 검색
+      const second = callUrl(1);
+      expect(second).toContain("/search");
+      expect(second).not.toContain("publishedAfter=");
     });
   });
 });

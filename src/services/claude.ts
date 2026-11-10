@@ -14,7 +14,7 @@ import type {
 } from "@/types";
 
 const DEFAULT_MODEL = "claude-haiku-5-5";
-const MAX_TOKENS = 2048;
+const MAX_TOKENS = 4096;
 
 function getClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -41,19 +41,30 @@ function extractText(message: unknown): string {
     .trim();
 }
 
-/** 코드펜스를 벗기고 JSON 으로 파싱한다. 실패 시 Error. */
+/** 코드펜스/주변 텍스트를 벗기고 JSON 으로 파싱한다. 실패 시 Error. */
 function parseJson<T>(raw: string): T {
   let text = raw.trim();
-  const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fenced) text = fenced[1].trim();
 
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error(
-      `Claude 응답을 JSON 으로 파싱할 수 없습니다: ${raw.slice(0, 200)}`,
-    );
+  // 1) 있는 그대로, 2) 가장 바깥 { } 또는 [ ] 범위만 추출한 후보 순으로 시도.
+  const candidates = [text];
+  const starts = [text.indexOf("{"), text.indexOf("[")].filter((i) => i >= 0);
+  const end = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
+  if (starts.length && end > Math.min(...starts)) {
+    candidates.push(text.slice(Math.min(...starts), end + 1));
   }
+
+  for (const c of candidates) {
+    try {
+      return JSON.parse(c) as T;
+    } catch {
+      /* 다음 후보 시도 */
+    }
+  }
+  throw new Error(
+    `Claude 응답을 JSON 으로 파싱할 수 없습니다 (len=${raw.length}): ${raw.slice(0, 200)}`,
+  );
 }
 
 async function complete(prompt: string): Promise<string> {
@@ -88,7 +99,7 @@ ${corpus}
 반드시 아래 스키마의 JSON 객체 "하나만" 출력하세요. 설명/코드펜스/추가 텍스트 금지.
 {
   "niche": "한 줄 니치 정의",
-  "topics": ["자주 다루는 주제/키워드", "..."],
+  "topics": ["검색에 쓸 짧은 키워드 (2~4단어, 문장 금지)", "..."],
   "format": "주된 포맷 (예: 브이로그, 리뷰, 튜토리얼)",
   "tone": "톤/분위기",
   "targetAudience": "주 타깃 시청자",

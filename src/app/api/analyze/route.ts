@@ -52,8 +52,9 @@ export async function POST(req: Request): Promise<Response> {
       recommendations,
     };
     return NextResponse.json(result, { status: 200 });
-  } catch {
+  } catch (err) {
     // 내부 에러 상세(키/스택 등)는 응답에 싣지 않는다. 서버 로그로만 남긴다.
+    console.error("[/api/analyze] 처리 실패:", err);
     return errorResponse(
       500,
       "분석 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
